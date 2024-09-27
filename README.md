@@ -17,14 +17,11 @@ git clone https://github.com/yourusername/ExcelDataMatcher.git
 cd ExcelDataMatcher
 
 创建虚拟环境（可选）：
-```bash
 python -m venv venv
 source venv/bin/activate  # 在 Windows 上使用 `venv\Scripts\activate`
 
 安装依赖
-```bash
 pip install -r requirements.txt
 
 运行
-```bash
 python ExcelDataMatcher.py

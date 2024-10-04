@@ -31,7 +31,7 @@ jobs:
 
     - name: Build executable with Nuitka
       run: |
-        nuitka --standalone --onefile --windows-console-mode=disable --enable-plugin=tk-inter --include-package=pandas --include-package=ttkbootstrap --include-package=tkinterdnd2 --include-data-file=logo.ico=logo.ico --windows-icon-from-ico=logo.ico ExcelDataMatcher.py
+        nuitka --standalone --onefile --windows-console-mode=disable --enable-plugin=tk-inter --include-package=pandas --include-package=ttkbootstrap --include-data-file=logo.ico=logo.ico --windows-icon-from-ico=logo.ico ExcelDataMatcher.py
 
     - name: Upload artifact
       uses: actions/upload-artifact@v3

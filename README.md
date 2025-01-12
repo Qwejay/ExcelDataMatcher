@@ -9,6 +9,14 @@ ExcelDataMatcher 是一个用于从 Excel 文件中提取特定行数据的 Pyth
 - 支持指定表头行或不需要表头。
 - 提取的数据可以保存为新的 Excel 文件。
 
+
+## 更新日志 版本 1.1
+### 功能
+- 优化程序大小，使用xlrd和openpyxl替代pandas
+- 列名输入框增加右键菜单，支持粘贴、复制和清除操作
+- 增加状态栏，实时显示操作状态
+- 优化界面布局
+
 ## 使用方法
 
 ```bash
@@ -25,3 +33,6 @@ pip install -r requirements.txt
 
 运行
 python ExcelDataMatcher.py
+
+打包代码
+pyinstaller --onefile --noconsole --icon=icon.ico --name=ExcelDataMatcher --add-data "icon.ico;." --hidden-import=tkinter --exclude-module=pytest --exclude-module=unittest --clean --strip ExcelDataMatcher.py

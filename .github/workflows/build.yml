@@ -1,0 +1,95 @@
+name: Build and Package
+
+on:
+  push:
+    tags:
+      - 'v*'
+      - '[0-9]*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '手动构建版本号 (例如: 1.2)'
+        required: true
+        default: '1.2'
+ 
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.9'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install nuitka zstandard openpyxl pillow
+
+    - name: Build executable with Nuitka
+      shell: powershell
+      run: |
+        # 1. 基础打包参数数组
+        $nuitkaArgs = @(
+          "-m", "nuitka",
+          "--standalone",
+          "--onefile",
+          "--assume-yes-for-downloads",
+          "--windows-console-mode=disable",
+          "--enable-plugin=tk-inter",
+          "--include-package=pandas",
+          "--include-package=ttkbootstrap",
+          "--include-package=openpyxl",
+          "--output-filename=ExcelDataMatcher_${{ github.ref_name }}.exe"
+        )
+
+        # 2. 智能检测 logo.ico 是否存在，存在才打入图标，不存在则跳过，绝不报错
+        if (Test-Path "logo.ico") {
+            Write-Host "Found logo.ico, attaching icon to build..."
+            $nuitkaArgs += "--include-data-file=logo.ico=logo.ico"
+            $nuitkaArgs += "--windows-icon-from-ico=logo.ico"
+        } else {
+            Write-Host "WARNING: logo.ico not found in root folder! Skipping icon to prevent build failure."
+        }
+
+        # 3. 指定主入口文件
+        $nuitkaArgs += "main.py"
+
+        # 4. 执行构建
+        python @nuitkaArgs
+
+    - name: List built executables
+      run: Get-ChildItem -Recurse -Filter "*.exe"
+
+    - name: Create Zip Archive
+      shell: powershell
+      run: |
+        $exeFile = Get-ChildItem -Path . -Recurse -Filter "*.exe" | Where-Object { $_.Name -like "*ExcelDataMatcher*" -and $_.FullName -notlike "*\site-packages\*" } | Select-Object -First 1
+        
+        if ($exeFile) {
+            Write-Host "Found executable at: $($exeFile.FullName)"
+            Compress-Archive -Path $exeFile.FullName -DestinationPath "ExcelDataMatcher_${{ github.ref_name }}.zip"
+        } else {
+            Write-Error "Error: No matching executable file found!"
+            exit 1
+        }
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ExcelDataMatcher_${{ github.ref_name }}-zip
+        path: ExcelDataMatcher_${{ github.ref_name }}.zip
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: ExcelDataMatcher_${{ github.ref_name }}.zip
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -8,10 +8,13 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '手动构建版本号 (例如: 1.2)'
+        description: '手动构建版本号 (例如: v1.2)'
         required: true
-        default: '1.2'
- 
+        default: 'v1.2'
+
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -31,10 +34,17 @@ jobs:
         pip install -r requirements.txt
         pip install nuitka zstandard openpyxl pillow
 
+    - name: Set Release Version
+      shell: powershell
+      run: |
+        $ver = "${{ inputs.version }}"
+        if (-not $ver) { $ver = "${{ github.ref_name }}" }
+        Write-Host "Building version: $ver"
+        echo "VERSION=$ver" >> $env:GITHUB_ENV
+
     - name: Build executable with Nuitka
       shell: powershell
       run: |
-        # 1. 基础打包参数数组
         $nuitkaArgs = @(
           "-m", "nuitka",
           "--standalone",
@@ -45,10 +55,9 @@ jobs:
           "--include-package=pandas",
           "--include-package=ttkbootstrap",
           "--include-package=openpyxl",
-          "--output-filename=ExcelDataMatcher_${{ github.ref_name }}.exe"
+          "--output-filename=ExcelDataMatcher_$env:VERSION.exe"
         )
 
-        # 2. 智能检测 logo.ico 是否存在，存在才打入图标，不存在则跳过，绝不报错
         if (Test-Path "logo.ico") {
             Write-Host "Found logo.ico, attaching icon to build..."
             $nuitkaArgs += "--include-data-file=logo.ico=logo.ico"
@@ -57,10 +66,7 @@ jobs:
             Write-Host "WARNING: logo.ico not found in root folder! Skipping icon to prevent build failure."
         }
 
-        # 3. 指定主入口文件
         $nuitkaArgs += "main.py"
-
-        # 4. 执行构建
         python @nuitkaArgs
 
     - name: List built executables
@@ -73,7 +79,7 @@ jobs:
         
         if ($exeFile) {
             Write-Host "Found executable at: $($exeFile.FullName)"
-            Compress-Archive -Path $exeFile.FullName -DestinationPath "ExcelDataMatcher_${{ github.ref_name }}.zip"
+            Compress-Archive -Path $exeFile.FullName -DestinationPath "ExcelDataMatcher_$env:VERSION.zip"
         } else {
             Write-Error "Error: No matching executable file found!"
             exit 1
@@ -82,13 +88,14 @@ jobs:
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: ExcelDataMatcher_${{ github.ref_name }}-zip
-        path: ExcelDataMatcher_${{ github.ref_name }}.zip
+        name: ExcelDataMatcher_${{ env.VERSION }}-zip
+        path: ExcelDataMatcher_${{ env.VERSION }}.zip
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
       with:
-        files: ExcelDataMatcher_${{ github.ref_name }}.zip
+        tag_name: ${{ env.VERSION }}
+        files: ExcelDataMatcher_${{ env.VERSION }}.zip
         draft: false
         prerelease: false
       env:

@@ -9,19 +9,29 @@ from ttkbootstrap.constants import *
 from ttkbootstrap.tooltip import ToolTip
 from openpyxl import load_workbook, Workbook
 import xlrd
+import traceback
+
+__app_name__ = "ExcelDataMatcher"
+__version__ = "2.0.0"
+__author__ = "Qwejayhuang"
+__copyright__ = f"Copyright © 2026 {__author__}"
+__description__ = "Excel 表格数据提取工具"
+
 
 class ExcelExtractorApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("表格数据提取器 ExcelDataMatcher 1.2")
-        self.root.geometry("880x720")
-        self.root.minsize(800, 650)
+        self.root.title(f"{__app_name__} v{__version__} —— {__description__}")
+        self.root.geometry("980x800")
+        self.root.minsize(1024, 730)
 
+        # 数据变量
         self.file_path = None
         self.sheet_names = []
         self.extracted_data = []
         self.is_processing = False
 
+        # 配置变量
         self.selected_sheet = tk.StringVar()
         self.search_all_sheets = tk.BooleanVar(value=False)
         self.header_row = tk.StringVar(value="1")
@@ -44,112 +54,144 @@ class ExcelExtractorApp:
         self.toggle_no_header()
         
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
-        
         self.root.after(100, self.process_queue)
 
     def create_widgets(self):
-        main_frame = ttk.Frame(self.root, padding=12)
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        # 主容器：增加内边距，呈现 MD3 呼吸感
+        main_container = ttk.Frame(self.root, padding=15)
+        main_container.pack(fill=tk.BOTH, expand=True)
 
-        file_frame = ttk.LabelFrame(main_frame, text=" 1. 文件与工作表选择 ", padding=10)
-        file_frame.pack(fill=tk.X, pady=4)
-
-        f_top = ttk.Frame(file_frame)
-        f_top.pack(fill=tk.X, pady=(0, 6))
-        self.file_label = ttk.Label(f_top, text="未选择文件", font=("Helvetica", 9, "italic"))
-        self.file_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        ttk.Button(f_top, text="选择表格文件", command=self.select_file, bootstyle=PRIMARY).pack(side=tk.RIGHT, padx=5)
-
-        f_grid = ttk.Frame(file_frame)
-        f_grid.pack(fill=tk.X, pady=2)
-
-        ttk.Label(f_grid, text="目标工作表:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=3)
-        self.sheet_combobox = ttk.Combobox(f_grid, textvariable=self.selected_sheet, state='readonly', width=22)
-        self.sheet_combobox.grid(row=0, column=1, sticky=tk.W, padx=5, pady=3)
-        ttk.Checkbutton(f_grid, text="搜索所有Sheet", variable=self.search_all_sheets, command=self.toggle_search_all).grid(row=0, column=2, sticky=tk.W, padx=15, pady=3)
-
-        ttk.Label(f_grid, text="表头所在行:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=3)
-        self.header_entry = ttk.Entry(f_grid, textvariable=self.header_row, width=8)
-        self.header_entry.grid(row=1, column=1, sticky=tk.W, padx=5, pady=3)
-        ttk.Checkbutton(f_grid, text="无表头数据", variable=self.no_header, command=self.toggle_no_header).grid(row=1, column=2, sticky=tk.W, padx=15, pady=3)
-
-        rule_frame = ttk.LabelFrame(main_frame, text=" 2. 提取与匹配规则 ", padding=10)
-        rule_frame.pack(fill=tk.X, pady=4)
-
-        r_grid = ttk.Frame(rule_frame)
-        r_grid.pack(fill=tk.X, pady=2)
-
-        ttk.Label(r_grid, text="匹配模式:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=3)
-        m_frame = ttk.Frame(r_grid)
-        m_frame.grid(row=0, column=1, columnspan=3, sticky=tk.W)
-        ttk.Radiobutton(m_frame, text="包含(模糊)", value="contains", variable=self.match_mode).pack(side=tk.LEFT, padx=(5, 10))
-        ttk.Radiobutton(m_frame, text="精确匹配", value="exact", variable=self.match_mode).pack(side=tk.LEFT, padx=10)
-        ttk.Radiobutton(m_frame, text="正则匹配", value="regex", variable=self.match_mode).pack(side=tk.LEFT, padx=10)
-
-        ttk.Label(r_grid, text="逻辑关系:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=3)
-        l_frame = ttk.Frame(r_grid)
-        l_frame.grid(row=1, column=1, columnspan=3, sticky=tk.W)
-        ttk.Radiobutton(l_frame, text="满足任一关键词(OR)", value="OR", variable=self.match_logic).pack(side=tk.LEFT, padx=(5, 10))
-        ttk.Radiobutton(l_frame, text="满足所有关键词(AND)", value="AND", variable=self.match_logic).pack(side=tk.LEFT, padx=10)
-
-        ttk.Checkbutton(r_grid, text="区分大小写", variable=self.case_sensitive).grid(row=2, column=0, columnspan=2, sticky=tk.W, padx=5, pady=3)
+        # ==============================================================================
+        # 1. 顶部：MD3 风格的大型文件选择区 (借鉴 DropArea)
+        # ==============================================================================
+        file_area = ttk.Frame(main_container, bootstyle="secondary")
+        file_area.pack(fill=tk.X, pady=(0, 15))
         
-        ttk.Label(r_grid, text="指定查找列(可选):").grid(row=2, column=2, sticky=tk.E, padx=(20, 5), pady=3)
-        self.col_entry = ttk.Entry(r_grid, textvariable=self.target_columns, width=15)
-        self.col_entry.grid(row=2, column=3, sticky=tk.W, padx=5, pady=3)
-        ToolTip(self.col_entry, text="为空则查找全部列。可输入字母或数字，如：A, C 或 1, 3")
-
-        middle_frame = ttk.Frame(main_frame)
-        middle_frame.pack(fill=tk.BOTH, expand=True, pady=4)
-
-        kw_frame = ttk.LabelFrame(middle_frame, text=" 关键词/正则列表（每行一个） ", padding=5)
-        kw_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+        self.drop_frame = ttk.Frame(file_area, padding=20, bootstyle="default")
+        self.drop_frame.pack(fill=tk.X, expand=True)
+        self.drop_frame.configure(borderwidth=2, relief="groove")
         
-        self.column_text = tk.Text(kw_frame, height=5, width=35)
+        icon_label = ttk.Label(self.drop_frame, text="📄", font=("Microsoft YaHei", 36))
+        icon_label.pack(pady=(0, 5))
+        
+        self.file_label = ttk.Label(self.drop_frame, text="点击下方按钮选择 Excel 文件", font=("Microsoft YaHei", 12, "bold"))
+        self.file_label.pack(pady=(0, 10))
+        
+        ttk.Button(self.drop_frame, text="浏览并选择文件", command=self.select_file, bootstyle="primary-outline", width=20).pack()
+
+        # ==============================================================================
+        # 2. 中部：参数配置区 (左右分栏，布局更规整)
+        # ==============================================================================
+        settings_frame = ttk.Frame(main_container)
+        settings_frame.pack(fill=tk.X, pady=(0, 15))
+        settings_frame.columnconfigure(0, weight=1)
+        settings_frame.columnconfigure(1, weight=1)
+
+        # 左侧：工作表与规则
+        left_settings = ttk.LabelFrame(settings_frame, text=" 表格与匹配规则 ", padding=15)
+        left_settings.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+
+        # 工作表选择
+        row1 = ttk.Frame(left_settings)
+        row1.pack(fill=tk.X, pady=5)
+        ttk.Label(row1, text="目标 Sheet:").pack(side=tk.LEFT, padx=(0, 10))
+        self.sheet_combobox = ttk.Combobox(row1, textvariable=self.selected_sheet, state='readonly', width=15)
+        self.sheet_combobox.pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Checkbutton(row1, text="所有Sheet", variable=self.search_all_sheets, command=self.toggle_search_all).pack(side=tk.LEFT)
+
+        # 表头设置
+        row2 = ttk.Frame(left_settings)
+        row2.pack(fill=tk.X, pady=5)
+        ttk.Label(row2, text="表头所在行:").pack(side=tk.LEFT, padx=(0, 10))
+        self.header_entry = ttk.Entry(row2, textvariable=self.header_row, width=8)
+        self.header_entry.pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Checkbutton(row2, text="无表头", variable=self.no_header, command=self.toggle_no_header).pack(side=tk.LEFT)
+
+        # 匹配模式
+        row3 = ttk.Frame(left_settings)
+        row3.pack(fill=tk.X, pady=5)
+        ttk.Label(row3, text="匹配模式:").pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Radiobutton(row3, text="包含", value="contains", variable=self.match_mode).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(row3, text="精确", value="exact", variable=self.match_mode).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(row3, text="正则", value="regex", variable=self.match_mode).pack(side=tk.LEFT, padx=5)
+
+        # 逻辑与列数
+        row4 = ttk.Frame(left_settings)
+        row4.pack(fill=tk.X, pady=5)
+        ttk.Radiobutton(row4, text="OR(任一)", value="OR", variable=self.match_logic).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Radiobutton(row4, text="AND(所有)", value="AND", variable=self.match_logic).pack(side=tk.LEFT, padx=(0, 15))
+        ttk.Label(row4, text="指定列(可选):").pack(side=tk.LEFT)
+        self.col_entry = ttk.Entry(row4, textvariable=self.target_columns, width=10)
+        self.col_entry.pack(side=tk.LEFT, padx=5)
+        ToolTip(self.col_entry, text="如：A, C 或 1, 3")
+
+        # 右侧：关键词输入与数据清洗
+        right_settings = ttk.Frame(settings_frame)
+        right_settings.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+
+        kw_frame = ttk.LabelFrame(right_settings, text=" 关键词/正则列表 (每行一个) ", padding=10)
+        kw_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        
+        # 🟢 【已修复字体模糊】改用清晰的 Microsoft YaHei 字体
+        self.column_text = tk.Text(kw_frame, height=5, font=("Microsoft YaHei", 10))
         self.column_text.pack(fill=tk.BOTH, expand=True)
 
-        clean_frame = ttk.LabelFrame(middle_frame, text=" 数据清洗与输出设置 ", padding=8)
-        clean_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(5, 0))
+        clean_frame = ttk.LabelFrame(right_settings, text=" 数据清洗与输出 ", padding=10)
+        clean_frame.pack(fill=tk.X)
+        c_row1 = ttk.Frame(clean_frame)
+        c_row1.pack(fill=tk.X)
+        ttk.Checkbutton(c_row1, text="去单元格换行", variable=self.remove_inner_empty_var).pack(side=tk.LEFT, expand=True, anchor=tk.W)
+        ttk.Checkbutton(c_row1, text="移除空行", variable=self.remove_empty_rows_var).pack(side=tk.LEFT, expand=True, anchor=tk.W)
+        c_row2 = ttk.Frame(clean_frame)
+        c_row2.pack(fill=tk.X, pady=(5,0))
+        ttk.Checkbutton(c_row2, text="去重匹配行", variable=self.remove_duplicates_var).pack(side=tk.LEFT, expand=True, anchor=tk.W)
+        ttk.Checkbutton(c_row2, text="添加来源Sheet", variable=self.include_source_sheet_var).pack(side=tk.LEFT, expand=True, anchor=tk.W)
 
-        cb1 = ttk.Checkbutton(clean_frame, text="去除单元格内换行符/空行", variable=self.remove_inner_empty_var)
-        cb1.pack(anchor=tk.W, pady=3)
+        # ==============================================================================
+        # 3. 数据提取预览区 (保持树形视图)
+        # ==============================================================================
+        preview_frame = ttk.LabelFrame(main_container, text=" 数据提取预览 (Top 100) ", padding=10)
+        preview_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
 
-        cb2 = ttk.Checkbutton(clean_frame, text="移除整行空数据", variable=self.remove_empty_rows_var)
-        cb2.pack(anchor=tk.W, pady=3)
-
-        cb3 = ttk.Checkbutton(clean_frame, text="去除重复匹配行", variable=self.remove_duplicates_var)
-        cb3.pack(anchor=tk.W, pady=3)
-
-        cb4 = ttk.Checkbutton(clean_frame, text="输出结果添加来源Sheet列", variable=self.include_source_sheet_var)
-        cb4.pack(anchor=tk.W, pady=3)
-
-        self.btn_run = ttk.Button(clean_frame, text=" 开始提取数据 ", command=self.start_extract_thread, bootstyle=SUCCESS, width=20)
-        self.btn_run.pack(pady=(15, 5))
-
-        preview_frame = ttk.LabelFrame(main_frame, text=" 数据提取预览 (最多显示前100条) ", padding=5)
-        preview_frame.pack(fill=tk.BOTH, expand=True, pady=4)
-
-        self.tree = ttk.Treeview(preview_frame, show="headings", height=6)
+        self.tree = ttk.Treeview(preview_frame, show="headings", selectmode="extended")
         tree_scroll_y = ttk.Scrollbar(preview_frame, orient=tk.VERTICAL, command=self.tree.yview)
         tree_scroll_x = ttk.Scrollbar(preview_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
         self.tree.configure(yscrollcommand=tree_scroll_y.set, xscrollcommand=tree_scroll_x.set)
 
-        tree_scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
-        tree_scroll_x.pack(side=tk.BOTTOM, fill=tk.X)
-        self.tree.pack(fill=tk.BOTH, expand=True)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        tree_scroll_y.grid(row=0, column=1, sticky="ns")
+        tree_scroll_x.grid(row=1, column=0, sticky="ew")
+        preview_frame.rowconfigure(0, weight=1)
+        preview_frame.columnconfigure(0, weight=1)
 
-        bottom_frame = ttk.Frame(main_frame)
-        bottom_frame.pack(fill=tk.X, pady=4)
+        # ==============================================================================
+        # 4. 底部：状态栏与动作按钮 (借鉴 QuickSettingsBar & 版权信息)
+        # ==============================================================================
+        bottom_bar = ttk.Frame(main_container)
+        bottom_bar.pack(fill=tk.X, side=tk.BOTTOM)
 
-        self.progress_bar = ttk.Progressbar(bottom_frame, mode='indeterminate', bootstyle=STRIPED)
-        self.progress_bar.pack(fill=tk.X, pady=2)
+        self.progress_bar = ttk.Progressbar(bottom_bar, mode='indeterminate', bootstyle=STRIPED)
+        self.progress_bar.pack(fill=tk.X, pady=(0, 10))
 
-        self.status_var = tk.StringVar(value="就绪")
-        status_label = ttk.Label(bottom_frame, textvariable=self.status_var, anchor=tk.W, font=("Helvetica", 9))
-        status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        action_frame = ttk.Frame(bottom_bar)
+        action_frame.pack(fill=tk.X)
 
-        self.save_btn = ttk.Button(bottom_frame, text="导出结果到Excel", command=self.save_to_excel, bootstyle=INFO, state=tk.DISABLED)
-        self.save_btn.pack(side=tk.RIGHT, padx=5)
+        # 状态指示
+        self.status_var = tk.StringVar(value="就绪：请先选择文件")
+        self.status_label = ttk.Label(action_frame, textvariable=self.status_var, font=("Microsoft YaHei", 9, "bold"), bootstyle="secondary")
+        self.status_label.pack(side=tk.LEFT)
+
+        # 🟢 【已添加版权声明】
+        copyright_text = f" |  {__copyright__}"
+        self.copyright_label = ttk.Label(action_frame, text=copyright_text, font=("Microsoft YaHei", 9), bootstyle="secondary-light")
+        self.copyright_label.pack(side=tk.LEFT, padx=(5, 0))
+
+        # 操作按钮
+        self.btn_run = ttk.Button(action_frame, text=" 🚀 开始提取 ", command=self.start_extract_thread, bootstyle="success", width=15)
+        self.btn_run.pack(side=tk.RIGHT, padx=(10, 0))
+
+        self.save_btn = ttk.Button(action_frame, text=" 💾 导出到Excel ", command=self.save_to_excel, bootstyle="info-outline", state=tk.DISABLED, width=15)
+        self.save_btn.pack(side=tk.RIGHT)
 
     def create_context_menu(self):
         self.context_menu = tk.Menu(self.root, tearoff=0)
@@ -165,13 +207,11 @@ class ExcelExtractorApp:
 
         file_path = filedialog.askopenfilename(filetypes=[("Excel 文件", "*.xlsx *.xls")])
         if file_path:
-            self.file_path = file_path
-            self.file_label.config(text=os.path.basename(file_path), font=("Helvetica", 9, "bold"))
+            wb = None
             try:
                 if file_path.endswith(".xlsx"):
                     wb = load_workbook(file_path, read_only=True)
                     self.sheet_names = wb.sheetnames
-                    wb.close()
                 else:
                     wb = xlrd.open_workbook(file_path)
                     self.sheet_names = wb.sheet_names()
@@ -179,37 +219,41 @@ class ExcelExtractorApp:
                 if not self.sheet_names:
                     raise ValueError("该 Excel 文件中没有包含任何有效的工作表！")
 
+                self.file_path = file_path
+                self.file_label.config(text=os.path.basename(file_path), bootstyle="primary")
                 self.sheet_combobox['values'] = self.sheet_names
                 self.selected_sheet.set(self.sheet_names[0])
+                
                 self.status_var.set("文件加载成功！")
+                self.status_label.configure(bootstyle="success")
             except Exception as e:
-                self.status_var.set(f"文件读取错误: {str(e)}")
-                messagebox.showerror("文件读取失败", f"无法解析该文件，请检查是否损坏或被占用:\n{str(e)}")
+                self.status_var.set("文件读取错误！")
+                self.status_label.configure(bootstyle="danger")
+                messagebox.showerror("文件读取失败", f"无法解析该文件:\n{str(e)}")
                 self.file_path = None
+                self.file_label.config(text="点击下方按钮选择 Excel 文件", bootstyle="default")
                 self.sheet_combobox['values'] = []
                 self.selected_sheet.set("")
+            finally:
+                if wb and hasattr(wb, 'close'):
+                    try: wb.close()
+                    except Exception: pass
 
     def toggle_search_all(self):
         self.sheet_combobox.config(state='disabled' if self.search_all_sheets.get() else 'readonly')
 
     def toggle_no_header(self):
-        if self.no_header.get():
-            self.header_entry.config(state=tk.DISABLED)
-        else:
-            self.header_entry.config(state=tk.NORMAL)
+        self.header_entry.config(state=tk.DISABLED if self.no_header.get() else tk.NORMAL)
 
     def parse_target_columns(self):
         raw = self.target_columns.get().strip()
-        if not raw:
-            return None
+        if not raw: return None
         cols = []
         for item in re.split(r'[,，\s]+', raw):
-            if not item:
-                continue
+            if not item: continue
             if item.isdigit():
                 val = int(item) - 1
-                if val >= 0:
-                    cols.append(val)
+                if val >= 0: cols.append(val)
             elif item.isalpha():
                 idx = 0
                 for char in item.upper():
@@ -218,8 +262,7 @@ class ExcelExtractorApp:
         return list(set(cols)) if cols else None
 
     def parse_header_row(self):
-        if self.no_header.get():
-            return None
+        if self.no_header.get(): return None
         try:
             val = int(self.header_row.get().strip())
             return max(0, val - 1)
@@ -227,11 +270,10 @@ class ExcelExtractorApp:
             return 0 
 
     def start_extract_thread(self):
-        if self.is_processing:
-            return
+        if self.is_processing: return
 
         if not self.file_path or not os.path.exists(self.file_path):
-            messagebox.showwarning("提示", "请先选择有效的 Excel 文件！")
+            messagebox.showwarning("提示", "请先选择有效的Excel文件！")
             return
 
         keywords = [col.strip() for col in self.column_text.get("1.0", "end-1c").splitlines() if col.strip()]
@@ -241,8 +283,7 @@ class ExcelExtractorApp:
 
         if self.match_mode.get() == "regex":
             for kw in keywords:
-                try:
-                    re.compile(kw)
+                try: re.compile(kw)
                 except re.error as e:
                     messagebox.showerror("正则表达式语法错误", f"规则 [{kw}] 不合法:\n{str(e)}")
                     return
@@ -250,8 +291,10 @@ class ExcelExtractorApp:
         self.is_processing = True
         self.btn_run.config(state=tk.DISABLED)
         self.save_btn.config(state=tk.DISABLED)
+        self.status_label.configure(bootstyle="primary")
         self.progress_bar.start(10)
-        self.status_var.set("正在提取数据中，请稍候...")
+        self.status_var.set("正在飞速提取数据中，请稍候...")
+        self.tree.delete(*self.tree.get_children()) 
 
         threading.Thread(target=self.run_extraction, args=(keywords,), daemon=True).start()
 
@@ -265,12 +308,10 @@ class ExcelExtractorApp:
             
             for sheet_name in sheets_to_read:
                 rows = self.read_sheet_data(sheet_name)
-                if not rows:
-                    continue
+                if not rows: continue
 
                 if header_idx is not None:
-                    if header_idx >= len(rows):
-                        continue
+                    if header_idx >= len(rows): continue
                     data_rows = rows[header_idx + 1:]
                 else:
                     data_rows = rows
@@ -293,17 +334,18 @@ class ExcelExtractorApp:
 
             self.msg_queue.put(("SUCCESS", extracted_results))
         except Exception as e:
-            self.msg_queue.put(("ERROR", str(e)))
+            error_details = traceback.format_exc()
+            self.msg_queue.put(("ERROR", str(e), error_details))
 
     def read_sheet_data(self, sheet_name):
         data = []
+        wb = None
         try:
             if self.file_path.endswith(".xlsx"):
                 wb = load_workbook(self.file_path, read_only=True, data_only=True)
                 if sheet_name in wb.sheetnames:
                     sheet = wb[sheet_name]
                     data = list(sheet.iter_rows(values_only=True))
-                wb.close()
             else:
                 wb = xlrd.open_workbook(self.file_path)
                 if sheet_name in wb.sheet_names():
@@ -311,6 +353,10 @@ class ExcelExtractorApp:
                     data = [sheet.row_values(r) for r in range(sheet.nrows)]
         except Exception as e:
             print(f"读取 Sheet [{sheet_name}] 警告: {e}")
+        finally:
+            if wb and hasattr(wb, 'close'):
+                try: wb.close()
+                except Exception: pass
         return data
 
     def is_row_matched(self, row, keywords, target_cols):
@@ -328,10 +374,9 @@ class ExcelExtractorApp:
         else:
             for cell in row:
                 if cell is not None:
-                    cells_to_check.append(str(cell))
+                    cells_to_check.append(str(cell)) 
 
-        if not cells_to_check:
-            return False
+        if not cells_to_check: return False
 
         kw_matches = []
         for kw in keywords:
@@ -345,15 +390,12 @@ class ExcelExtractorApp:
                     elif mode == "regex":
                         flags = 0 if case_sen else re.IGNORECASE
                         matched = bool(re.search(kw, cell_str, flags))
-                    else:
-                        matched = False
+                    else: matched = False
 
                     if matched:
                         kw_hit = True
                         break
-                except Exception:
-                    continue
-
+                except Exception: continue
             kw_matches.append(kw_hit)
 
         return any(kw_matches) if logic == "OR" else all(kw_matches)
@@ -366,8 +408,7 @@ class ExcelExtractorApp:
                 if isinstance(cell, str):
                     lines = [line.strip() for line in cell.splitlines() if line.strip()]
                     cleaned_row.append("\n".join(lines))
-                else:
-                    cleaned_row.append(cell)
+                else: cleaned_row.append(cell)
             cleaned.append(cleaned_row)
         return cleaned
 
@@ -383,33 +424,42 @@ class ExcelExtractorApp:
 
     def process_queue(self):
         try:
-            msg_type, result = self.msg_queue.get_nowait()
+            msg = self.msg_queue.get_nowait()
+            msg_type = msg[0]
+            
             self.progress_bar.stop()
             self.is_processing = False
             self.btn_run.config(state=tk.NORMAL)
             
             if msg_type == "SUCCESS":
+                result = msg[1]
                 self.extracted_data = result
                 count = len(result)
-                self.status_var.set(f"完成！共匹配到 {count} 条符合条件的数据。")
-                self.update_treeview_preview(result)
+                
                 if count > 0:
+                    self.status_var.set(f"提取完成！共匹配到 {count} 条符合条件的数据。")
+                    self.status_label.configure(bootstyle="success")
+                    self.update_treeview_preview(result)
                     self.save_btn.config(state=tk.NORMAL)
                 else:
-                    messagebox.showinfo("结果", "未能找到任何匹配的数据行。")
-            elif msg_type == "ERROR":
-                self.status_var.set(f"提取失败: {result}")
-                messagebox.showerror("提取失败", f"处理过程中发生异常:\n{result}")
+                    self.status_var.set("无匹配结果。请检查规则是否过于严格。")
+                    self.status_label.configure(bootstyle="warning")
+                    self.save_btn.config(state=tk.DISABLED)
 
-        except queue.Empty:
-            pass
+            elif msg_type == "ERROR":
+                err_msg, err_details = msg[1], msg[2]
+                self.status_var.set("提取失败，发生异常！")
+                self.status_label.configure(bootstyle="danger")
+                messagebox.showerror("提取失败", f"处理过程中发生严重异常:\n{err_msg}")
+                print(f"Extraction Error Details:\n{err_details}")
+
+        except queue.Empty: pass
         finally:
             self.root.after(100, self.process_queue)
 
     def update_treeview_preview(self, data):
         self.tree.delete(*self.tree.get_children())
-        if not data:
-            return
+        if not data: return
 
         max_cols_in_data = max(len(row) for row in data[:100])
         display_col_count = min(max_cols_in_data, 30) 
@@ -420,21 +470,23 @@ class ExcelExtractorApp:
         for i in range(display_col_count):
             col_name = "来源Sheet" if (i == 0 and self.include_source_sheet_var.get()) else f"列 {i if not self.include_source_sheet_var.get() else i}"
             self.tree.heading(f"col_{i}", text=col_name)
-            self.tree.column(f"col_{i}", width=110, anchor=tk.W)
+            self.tree.column(f"col_{i}", width=120, minwidth=100, anchor=tk.CENTER)
 
         for row in data[:100]:
             display_row = [str(c) if c is not None else "" for c in row[:display_col_count]]
             self.tree.insert("", tk.END, values=display_row)
 
     def save_to_excel(self):
-        if not self.extracted_data:
-            return
+        if not self.extracted_data: return
 
         save_path = filedialog.asksaveasfilename(
             defaultextension=".xlsx",
-            filetypes=[("Excel 文件", "*.xlsx")]
+            filetypes=[("Excel 文件", "*.xlsx")],
+            title="导出数据"
         )
+        
         if save_path:
+            wb = None
             try:
                 wb = Workbook()
                 ws = wb.active
@@ -444,21 +496,24 @@ class ExcelExtractorApp:
                     ws.append([str(cell) if cell is not None else "" for cell in row])
 
                 wb.save(save_path)
-                self.status_var.set(f"数据已成功保存至: {save_path}")
+                self.status_var.set(f"数据已成功保存至: {os.path.basename(save_path)}")
+                self.status_label.configure(bootstyle="success")
                 messagebox.showinfo("导出成功", f"文件保存成功！\n共保存 {len(self.extracted_data)} 行数据。")
-            except PermissionError:
-                messagebox.showerror("保存失败", f"无法写入文件！\n文件可能已在 Excel 中打开，请先关闭该文件后再试：\n{save_path}")
             except Exception as e:
-                messagebox.showerror("保存失败", f"导出过程中发生未知错误:\n{str(e)}")
+                messagebox.showerror("保存失败", f"导出过程中发生错误:\n{str(e)}")
+            finally:
+                if wb and hasattr(wb, 'close'):
+                    try: wb.close()
+                    except Exception: pass
 
     def on_closing(self):
         if self.is_processing:
-            if messagebox.askokcancel("退出确认", "程序正在提取数据，确定要强行退出吗？"):
+            if messagebox.askokcancel("退出确认", "程序正在后台提取数据，确定要退出吗？"):
                 self.root.destroy()
         else:
             self.root.destroy()
 
 if __name__ == "__main__":
-    root = ttk.Window(themename="superhero")
+    root = ttk.Window(themename="litera")
     app = ExcelExtractorApp(root)
     root.mainloop()

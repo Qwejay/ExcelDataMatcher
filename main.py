@@ -5,10 +5,9 @@ import csv
 import datetime
 import threading
 import queue
-import subprocess
 import platform
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 from ttkbootstrap.tooltip import ToolTip
@@ -31,13 +30,15 @@ except ImportError:
     HAS_WINDND = False
 
 try:
-    from tkinterdnd2 import DND_FILES
+    from tkinterdnd2 import DND_FILES, TkinterDnD
     HAS_TKDND = True
 except ImportError:
+    DND_FILES = None
+    TkinterDnD = None
     HAS_TKDND = False
 
 __app_name__ = "ExcelDataMatcher"
-__version__ = "3.0.0"
+__version__ = "3.0.2"
 __author__ = "Qwejayhuang"
 __copyright__ = f"Copyright © 2026 {__author__}"
 __description__ = "Excel 表格数据智能提取工具"
@@ -65,10 +66,10 @@ class ExcelExtractorApp:
         self.extracted_data = []
         self.is_processing = False
         self.is_advanced_expanded = False
+        self.close_when_done = False
 
         self.stat_scanned_var = tk.StringVar(value="0")
         self.stat_matched_var = tk.StringVar(value="0")
-        self.stat_ratio_var = tk.StringVar(value="0.0%")
         self.status_var = tk.StringVar(value="就绪：请先选择或拖入 Excel 文件")
 
         self.selected_sheet = tk.StringVar()
@@ -99,6 +100,18 @@ class ExcelExtractorApp:
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.root.after(80, self.process_queue)
 
+    def notify(self, message, level="info", detail=None):
+        """在界面状态栏显示非阻塞提示，不弹出模态窗口。"""
+        styles = {"info": "info", "success": "success", "warning": "warning", "error": "danger"}
+        self.status_var.set(str(message))
+        self.status_label.configure(bootstyle=styles.get(level, "primary"))
+        if detail:
+            print(f"[{level.upper()}] {message}\n{detail}")
+
+    def close_after_processing(self):
+        if self.close_when_done:
+            self.root.after_idle(self.root.destroy)
+
     def apply_screen_geometry(self):
         screen_w = self.root.winfo_screenwidth()
         screen_h = self.root.winfo_screenheight()
@@ -126,26 +139,76 @@ class ExcelExtractorApp:
                 except Exception:
                     pass
 
+    def _iter_widgets(self, widget):
+        yield widget
+        for child in widget.winfo_children():
+            yield from self._iter_widgets(child)
+
     def setup_drag_and_drop(self):
-        if HAS_WINDND:
+        # ttkbootstrap.Window 不是 TkinterDnD.Tk，需先将 tkdnd 注入现有 Tcl 解释器。
+        if HAS_TKDND:
             try:
-                windnd.hook_dropfiles(self.root, func=self.on_drop_files_safe)
+                TkinterDnD.require(self.root)
+                registered = 0
+                for widget in self._iter_widgets(self.root):
+                    try:
+                        widget.drop_target_register(DND_FILES)
+                        widget.dnd_bind("<<Drop>>", self.on_tkdnd_drop)
+                        registered += 1
+                    except (AttributeError, tk.TclError):
+                        continue
+                if registered:
+                    return
             except Exception as e:
-                print(f"windnd 挂载提示: {e}")
-        elif HAS_TKDND and hasattr(self.root, 'drop_target_register'):
-            try:
-                self.root.drop_target_register(DND_FILES)
-                self.root.dnd_bind('<<Drop>>', lambda e: self.on_drop_files_safe(self.root.tk.splitlist(e.data)))
-            except Exception:
-                pass
+                print(f"tkinterdnd2 挂载失败: {e}")
+
+        # 兼容仅安装 windnd 的 Windows 环境；对各子控件注册，避免只能拖到窗口空白处。
+        if HAS_WINDND:
+            registered = 0
+            for widget in self._iter_widgets(self.root):
+                try:
+                    windnd.hook_dropfiles(widget, func=self.on_drop_files_safe)
+                    registered += 1
+                except Exception:
+                    continue
+            if registered:
+                return
+
+        self.file_status_label.config(text="点击浏览选择 Excel 文件")
+        self.status_var.set("拖拽不可用：安装 tkinterdnd2 后可直接拖入文件")
+        print("未找到可用的文件拖拽组件，请运行：pip install tkinterdnd2")
+
+    def on_tkdnd_drop(self, event):
+        try:
+            # splitlist 可正确处理包含空格、中文及多个文件的路径。
+            self.on_drop_files_safe(self.root.tk.splitlist(event.data))
+        except Exception as e:
+            print(f"tkinterdnd2 拖拽数据解析失败: {e}")
+        return "copy"
 
     def on_drop_files_safe(self, files):
-        if not files: return
         try:
-            file_path = files[0]
-            if isinstance(file_path, bytes):
-                file_path = file_path.decode('gbk', errors='ignore')
-            self.msg_queue.put(("SAFE_DROP_EVENT", file_path))
+            if isinstance(files, (str, bytes, os.PathLike)):
+                files = [files]
+            paths = []
+            for path in files:
+                if not path:
+                    continue
+                if isinstance(path, bytes) and os.name == "nt":
+                    # windnd 返回 Windows ANSI 字节路径；用系统代码页解码中文路径。
+                    path = path.decode("mbcs", errors="replace")
+                else:
+                    path = os.fsdecode(os.fspath(path))
+                paths.append(path)
+            if not paths:
+                return
+
+            # 一次拖入多个文件时，优先加载第一个 Excel 文件。
+            excel_files = [
+                path for path in paths
+                if os.path.splitext(path)[1].lower() in (".xlsx", ".xls")
+            ]
+            self.msg_queue.put(("SAFE_DROP_EVENT", excel_files[0] if excel_files else paths[0]))
         except Exception as e:
             print(f"拖拽数据传递异常: {e}")
 
@@ -221,9 +284,8 @@ class ExcelExtractorApp:
             ttk.Label(box, text=label_text, font=("Microsoft YaHei", 8), bootstyle="secondary").pack(anchor=tk.W)
             ttk.Label(box, textvariable=val_var, font=("Microsoft YaHei", 14, "bold"), bootstyle=text_color).pack(anchor=tk.W)
 
-        add_kpi_metric(stats_strip, "已扫描总数据", self.stat_scanned_var, "secondary")
-        add_kpi_metric(stats_strip, "匹配命中行数", self.stat_matched_var, "success")
-        add_kpi_metric(stats_strip, "提取命中率", self.stat_ratio_var, "info")
+        add_kpi_metric(stats_strip, "扫描行数", self.stat_scanned_var, "secondary")
+        add_kpi_metric(stats_strip, "提取行数", self.stat_matched_var, "success")
 
         status_box = ttk.Frame(stats_strip)
         status_box.pack(side=tk.RIGHT, fill=tk.Y, pady=2)
@@ -340,11 +402,11 @@ class ExcelExtractorApp:
                 self.column_text.delete("1.0", tk.END)
                 self.column_text.insert(tk.END, "\n".join(lines))
                 self.update_kw_count()
-                messagebox.showinfo("导入成功", f"成功载入 {len(lines)} 个关键词！")
+                self.notify(f"已导入 {len(lines)} 个关键词", "success")
             else:
-                messagebox.showwarning("提示", "所选文件内容为空！")
+                self.notify("关键词文件为空，未导入任何内容", "warning")
         except Exception as e:
-            messagebox.showerror("导入失败", f"无法读取关键词文件:\n{str(e)}")
+            self.notify(f"关键词导入失败：{e}", "error")
 
     def on_treeview_double_click(self, event):
         region = self.tree.identify_region(event.x, event.y)
@@ -359,12 +421,11 @@ class ExcelExtractorApp:
             cell_val = str(item_values[col_index])
             self.root.clipboard_clear()
             self.root.clipboard_append(cell_val)
-            self.status_var.set(f"已复制: \"{cell_val[:20]}{'...' if len(cell_val) > 20 else ''}\"")
-            self.status_label.configure(bootstyle="info")
+            self.notify(f"已复制：{cell_val[:24]}{'…' if len(cell_val) > 24 else ''}", "info")
 
     def select_file(self):
         if self.is_processing:
-            messagebox.showwarning("警告", "后台正在提取数据，请勿切换文件！")
+            self.notify("后台正在提取数据，完成前无法切换文件", "warning")
             return
 
         file_path = filedialog.askopenfilename(filetypes=[("Excel 文件", "*.xlsx *.xls")])
@@ -374,7 +435,7 @@ class ExcelExtractorApp:
     def load_excel_file(self, file_path):
         wb = None
         try:
-            if file_path.endswith(".xlsx"):
+            if os.path.splitext(file_path)[1].lower() == ".xlsx":
                 wb = load_workbook(file_path, read_only=True)
                 self.sheet_names = wb.sheetnames
             else:
@@ -393,12 +454,9 @@ class ExcelExtractorApp:
             self.selected_sheet.set(self.sheet_names[0])
             self.toggle_search_all()
             
-            self.status_var.set("文件读取成功，请配置规则")
-            self.status_label.configure(bootstyle="success")
+            self.notify("Excel 文件已加载，请配置关键词", "success")
         except Exception as e:
-            self.status_var.set("文件解析失败！")
-            self.status_label.configure(bootstyle="danger")
-            messagebox.showerror("文件读取失败", f"无法解析该文件:\n{str(e)}")
+            self.notify(f"Excel 文件读取失败：{e}", "error")
             self.file_path = None
             self.file_status_label.config(text="点击或将文件拖入窗口", bootstyle="default")
             self.sheet_combobox['values'] = []
@@ -436,12 +494,12 @@ class ExcelExtractorApp:
         if self.is_processing: return
 
         if not self.file_path or not os.path.exists(self.file_path):
-            messagebox.showwarning("提示", "请先选择或拖入有效的 Excel 文件！")
+            self.notify("请先选择或拖入有效的 Excel 文件", "warning")
             return
 
         keywords = [col.strip() for col in self.column_text.get("1.0", "end-1c").splitlines() if col.strip()]
         if not keywords:
-            messagebox.showwarning("提示", "请输入至少一个关键词或正则表达规则！")
+            self.notify("请先输入至少一个关键词或正则表达规则", "warning")
             return
 
         match_mode = self.match_mode.get()
@@ -449,7 +507,7 @@ class ExcelExtractorApp:
             for kw in keywords:
                 try: re.compile(kw)
                 except re.error as e:
-                    messagebox.showerror("正则表达式语法错误", f"规则 [{kw}] 不合法:\n{str(e)}")
+                    self.notify(f"正则规则无效：{kw}（{e}）", "error")
                     return
 
         config = {
@@ -473,9 +531,8 @@ class ExcelExtractorApp:
         self.is_processing = True
         self.btn_run.config(state=tk.DISABLED)
         self.save_btn.config(state=tk.DISABLED)
-        self.status_label.configure(bootstyle="primary")
         self.progress_bar.start(10)
-        self.status_var.set("正在飞速检索分析中...")
+        self.notify("正在扫描并提取数据…", "info")
         self.tree.delete(*self.tree.get_children()) 
 
         threading.Thread(target=self.run_fast_extraction, args=(config,), daemon=True).start()
@@ -605,7 +662,7 @@ class ExcelExtractorApp:
         data_dict = {}
         wb = None
         try:
-            if file_path.endswith(".xlsx"):
+            if os.path.splitext(file_path)[1].lower() == ".xlsx":
                 wb = load_workbook(file_path, read_only=True, data_only=True)
                 for sheet_name in sheets_to_read:
                     if sheet_name in wb.sheetnames:
@@ -664,13 +721,13 @@ class ExcelExtractorApp:
                 if msg_type == "SAFE_DROP_EVENT":
                     dropped_file = msg[1]
                     if self.is_processing:
-                        messagebox.showwarning("警告", "后台正在提取数据，请勿切换文件！")
+                        self.notify("后台正在提取数据，完成前无法切换文件", "warning")
                     else:
                         ext = os.path.splitext(dropped_file)[1].lower()
                         if ext in ['.xlsx', '.xls']:
                             self.load_excel_file(dropped_file)
                         else:
-                            messagebox.showwarning("格式不支持", "仅支持拖入 Excel 文件 (*.xlsx / *.xls)！")
+                            self.notify("文件格式不支持，请拖入 .xlsx 或 .xls 文件", "warning")
 
                 elif msg_type == "SUCCESS":
                     self.progress_bar.stop()
@@ -683,19 +740,15 @@ class ExcelExtractorApp:
                     self.extracted_data = result
                     count = len(result)
                     
-                    ratio = (count / total_scanned * 100) if total_scanned > 0 else 0
                     self.stat_scanned_var.set(f"{total_scanned:,}")
                     self.stat_matched_var.set(f"{count:,}")
-                    self.stat_ratio_var.set(f"{ratio:.1f}%")
 
                     if count > 0:
-                        self.status_var.set("提取完成！已生成结果预览")
-                        self.status_label.configure(bootstyle="success")
+                        self.notify(f"提取完成：共 {count:,} 行，已生成预览", "success")
                         self.update_treeview_preview(result, self.extracted_headers)
                         self.save_btn.config(state=tk.NORMAL)
                     else:
-                        self.status_var.set("扫描完毕：无匹配结果")
-                        self.status_label.configure(bootstyle="warning")
+                        self.notify("扫描完成：没有符合条件的数据", "warning")
                         self.save_btn.config(state=tk.DISABLED)
 
                 elif msg_type == "ERROR":
@@ -704,15 +757,19 @@ class ExcelExtractorApp:
                     self.btn_run.config(state=tk.NORMAL)
 
                     err_msg, err_details = msg[1], msg[2]
-                    self.status_var.set("提取失败，发生异常！")
-                    self.status_label.configure(bootstyle="danger")
-                    messagebox.showerror("提取失败", f"处理过程中发生严重异常:\n{err_msg}")
-                    print(f"Extraction Error Details:\n{err_details}")
+                    self.notify(f"提取失败：{err_msg}", "error", err_details)
+
+                if msg_type in ("SUCCESS", "ERROR"):
+                    self.close_after_processing()
 
         except queue.Empty:
             pass
         finally:
-            self.root.after(80, self.process_queue)
+            try:
+                if self.root.winfo_exists():
+                    self.root.after(80, self.process_queue)
+            except tk.TclError:
+                pass
 
     def update_treeview_preview(self, data, headers):
         self.tree.delete(*self.tree.get_children())
@@ -796,32 +853,17 @@ class ExcelExtractorApp:
                 wb.save(save_path)
                 wb.close()
 
-            self.status_var.set(f"数据已保存: {os.path.basename(save_path)}")
-            self.status_label.configure(bootstyle="success")
-
-            if messagebox.askyesno("导出成功", f"文件保存成功！共导出 {len(self.extracted_data):,} 行数据。\n\n是否立即打开该文件？"):
-                self.open_file_externally(save_path)
+            self.notify(f"导出完成：{len(self.extracted_data):,} 行 · {os.path.basename(save_path)}", "success")
 
         except Exception as e:
-            messagebox.showerror("保存失败", f"导出过程中发生错误:\n{str(e)}")
-
-    def open_file_externally(self, filepath):
-        try:
-            if platform.system() == "Windows":
-                os.startfile(filepath)
-            elif platform.system() == "Darwin":
-                subprocess.Popen(["open", filepath])
-            else:
-                subprocess.Popen(["xdg-open", filepath])
-        except Exception as e:
-            messagebox.showwarning("打开失败", f"无法自动打开文件:\n{str(e)}")
+            self.notify(f"导出失败：{e}", "error")
 
     def on_closing(self):
         if self.is_processing:
-            if messagebox.askokcancel("退出确认", "程序正在后台提取数据，确定要退出吗？"):
-                self.root.destroy()
-        else:
-            self.root.destroy()
+            self.close_when_done = True
+            self.notify("提取任务正在运行，结束后将自动退出", "warning")
+            return
+        self.root.destroy()
 
 if __name__ == "__main__":
     root = ttk.Window(themename="cosmo")
